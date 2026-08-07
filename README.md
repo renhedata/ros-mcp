@@ -42,7 +42,7 @@ Choose exactly one device-registry source:
 
 The two sources use the same schema. Do not set `ROS_DEVICES_JSON` when using
 `--config`; the server rejects ambiguous configuration sources. Each device
-references its own credential environment variable.
+defines its SSH authentication method.
 
 ```json
 {
@@ -61,7 +61,7 @@ references its own credential environment variable.
     "output_limit_bytes": 1048576,
     "auth": {
       "type": "password",
-      "password_env": "ROS_MAIN_PASSWORD"
+      "password": "REPLACE_WITH_ROUTEROS_SSH_PASSWORD"
     },
     "host_key": {
       "fingerprint_sha256": "SHA256:REPLACE_WITH_43_BASE64_CHARACTERS"
@@ -87,14 +87,26 @@ references its own credential environment variable.
 `devices.example.json` contains the same sanitized configuration as a starting
 point. Keep actual device inventories outside version control.
 
-Set the referenced secrets separately, using the MCP client's secret store or
-the process environment:
+For password authentication, set exactly one of these fields:
+
+- `password`: the RouterOS SSH password directly in the configuration; no
+  credential environment variable is required.
+- `password_env`: the name of an environment variable containing the password.
+
+The legacy `password_env` form remains supported. Private-key authentication
+continues to use `private_key_env` and optional `passphrase_env` references:
 
 ```text
 ROS_MAIN_PASSWORD=<main RouterOS SSH password>
 ROS_OFFICE_PRIVATE_KEY=<complete PEM/OpenSSH private-key text>
 ROS_OFFICE_KEY_PASSPHRASE=<optional key passphrase>
 ```
+
+An inline `password` is plaintext in the configuration file. Treat that file as
+a secret: do not commit it, and mount it read-only in containers. For a local
+process, restrict it to the deployment user (for example, `chmod 600
+devices.json`). The default `devices.json` name is excluded from Git and Docker
+build contexts.
 
 Device IDs must match `^[a-z][a-z0-9_-]{0,63}$`. Configuration is validated and
 resolved once at startup, so restart the server after changing a configuration
@@ -117,11 +129,11 @@ uv run ros-mcp
 ```
 
 To deploy from a file instead, put the JSON object above in a UTF-8 file and
-pass its path. The file does not contain passwords, private keys, or
-passphrases; it only names their environment variables.
+pass its path. The inline password in the file requires no credential
+environment variable.
 
 ```bash
-export ROS_MAIN_PASSWORD='replace-me'
+chmod 600 /absolute/path/to/devices.json
 uv run ros-mcp --config /absolute/path/to/devices.json
 ```
 
@@ -157,15 +169,14 @@ server directly. Its root filesystem is safe to run read-only.
 ### Docker with a configuration file
 
 Mount the configuration file read-only and pass the container path to
-`--config` after the image name. The secret variable is forwarded from the
-Docker client process; add every variable referenced by the file.
+`--config` after the image name. A file with an inline password needs no
+credential environment variable.
 
 ```bash
 docker run --rm -i \
   --read-only \
   --tmpfs /tmp:rw,size=16m \
   --mount type=bind,src="/absolute/path/to/devices.json",dst=/config/devices.json,readonly \
-  -e ROS_MAIN_PASSWORD \
   ghcr.io/asharca/ros-mcp:latest \
   --config /config/devices.json
 ```
@@ -176,14 +187,17 @@ mount managed on that daemon rather than a path from the MCP client's machine.
 The mounted file must be readable by the image's UID/GID `10001`. Do not use
 `-t` or `-d`: the MCP transport needs attached stdin and stdout. Do not disable
 networking because the gateway needs outbound SSH access to RouterOS devices.
+Use a managed secret mount or set an owner/ACL that permits UID/GID `10001` to
+read the file without making it world-readable. If the file uses `password_env`,
+`private_key_env`, or `passphrase_env`, forward each referenced variable with
+Docker's `-e` option.
 
 ## Deploy as an MCP server
 
 ROS-MCP uses the stdio transport. Configure your MCP client to start one process
 per server instance and keep its stdin and stdout connected to the client. Client
 configuration formats differ, but clients that use an `mcpServers` object can
-use the following Docker command shape. Replace the placeholder secret with the
-client's secret-management mechanism rather than committing it to a config file.
+use the following Docker command shape for a secret-mounted configuration file.
 
 ```json
 {
@@ -199,23 +213,17 @@ client's secret-management mechanism rather than committing it to a config file.
         "/tmp:rw,size=16m",
         "--mount",
         "type=bind,src=/absolute/path/to/devices.json,dst=/config/devices.json,readonly",
-        "-e",
-        "ROS_MAIN_PASSWORD",
         "ghcr.io/asharca/ros-mcp:latest",
         "--config",
         "/config/devices.json"
-      ],
-      "env": {
-        "ROS_MAIN_PASSWORD": "<secret from your secret store>"
-      }
+      ]
     }
   }
 }
 ```
 
-The `env` entry supplies the secret to the Docker client, and `-e
-ROS_MAIN_PASSWORD` forwards it into the container. Add an `env` entry and `-e`
-argument for every credential named by the device file. Verify host-key
+For a file that uses environment-variable credential references instead, add the
+client's environment entries and matching Docker `-e` arguments. Verify host-key
 fingerprints through a trusted out-of-band channel, use a least-privileged
 RouterOS account, and keep manual approval enabled for `command_execute` in the
 MCP client.
@@ -229,8 +237,8 @@ MCP client.
    the deployment's Variables page, then restart it.
 4. For file configuration, use ToolPlane's file or secret-mount facility to
    place the file at (for example) `/config/devices.json`, then set Start Command
-   to `--config /config/devices.json`. Add the referenced secret variables as
-   deployment variables and restart it.
+   to `--config /config/devices.json`. Add deployment variables only when the
+   file uses environment-variable credential references, then restart it.
 5. Leave `Disconnect from network` disabled so the container can reach RouterOS
    SSH addresses.
 

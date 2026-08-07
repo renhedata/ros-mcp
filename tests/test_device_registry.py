@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from ros_mcp.device_registry import DeviceNotFoundError, DeviceRegistry, DeviceRegistryError
-from ros_mcp.models import AuthType
+from ros_mcp.models import AuthType, DeviceConfig
 
 FINGERPRINT_A = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 FINGERPRINT_B = "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA"
@@ -17,6 +17,17 @@ def password_device(password_env: str, **overrides: object) -> dict[str, object]
         "host": "192.0.2.1",
         "username": "ai-mgmt",
         "auth": {"type": "password", "password_env": password_env},
+        "host_key": {"fingerprint_sha256": FINGERPRINT_A},
+    }
+    device.update(overrides)
+    return device
+
+
+def inline_password_device(password: str, **overrides: object) -> dict[str, object]:
+    device: dict[str, object] = {
+        "host": "192.0.2.1",
+        "username": "ai-mgmt",
+        "auth": {"type": "password", "password": password},
         "host_key": {"fingerprint_sha256": FINGERPRINT_A},
     }
     device.update(overrides)
@@ -90,6 +101,28 @@ def test_loads_devices_from_a_configuration_file(tmp_path: Path) -> None:
     assert registry.get("office").password.get_secret_value() == "office-secret"
 
 
+def test_loads_an_inline_password_from_a_configuration_file(tmp_path: Path) -> None:
+    secret = "  inline secret!@#  "
+    config_path = write_config_file(
+        tmp_path,
+        {"main": inline_password_device(secret)},
+    )
+
+    registry = DeviceRegistry.from_file(config_path, {})
+
+    assert registry.get("main").password is not None
+    assert registry.get("main").password.get_secret_value() == secret
+
+
+def test_loads_an_inline_password_from_json_environment() -> None:
+    registry = DeviceRegistry.from_env(
+        environment({"main": inline_password_device("inline-secret")})
+    )
+
+    assert registry.get("main").password is not None
+    assert registry.get("main").password.get_secret_value() == "inline-secret"
+
+
 def test_resolves_complete_private_key_and_optional_passphrase() -> None:
     private_key = "-----BEGIN OPENSSH PRIVATE KEY-----\nkey-data\n-----END OPENSSH PRIVATE KEY-----"
     registry = DeviceRegistry.from_env(
@@ -137,6 +170,22 @@ def test_public_summary_and_resolved_dump_do_not_leak_sensitive_data() -> None:
     assert fingerprint not in combined
     assert "password" in summary_json
     assert "192.0.2.1" in summary_json
+
+
+def test_inline_password_does_not_leak_from_registry_outputs(tmp_path: Path) -> None:
+    secret = "highly-sensitive-inline-password"
+    device = inline_password_device(secret)
+    config_json = DeviceConfig.model_validate(device).model_dump_json()
+    registry = DeviceRegistry.from_file(
+        write_config_file(tmp_path, {"main": device}),
+        {},
+    )
+
+    combined = registry.list_devices().model_dump_json() + registry.get("main").model_dump_json()
+
+    assert secret not in config_json
+    assert secret not in combined
+    assert FINGERPRINT_A not in combined
 
 
 @pytest.mark.parametrize(
@@ -205,6 +254,51 @@ def test_rejects_invalid_or_unknown_configuration(
 def test_rejects_missing_empty_or_non_object_registry(environ: dict[str, str]) -> None:
     with pytest.raises(DeviceRegistryError):
         DeviceRegistry.from_env(environ)
+
+
+@pytest.mark.parametrize(
+    "auth",
+    [
+        {"type": "password"},
+        {"type": "password", "password": "   "},
+        {"type": "password", "password": "inline-secret", "password_env": "PASS"},
+        {"type": "unsupported", "password": "inline-secret"},
+    ],
+)
+def test_rejects_invalid_inline_password_configuration(auth: dict[str, str]) -> None:
+    device = inline_password_device("placeholder", auth=auth)
+
+    with pytest.raises(DeviceRegistryError) as raised:
+        DeviceRegistry.from_env(environment({"main": device}))
+
+    assert "inline-secret" not in str(raised.value)
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+
+
+def test_invalid_json_with_an_inline_password_does_not_retain_its_contents() -> None:
+    secret = "super-secret-in-invalid-json"
+    raw = f'{{"main":{{"auth":{{"type":"password","password":"{secret}"}}}}}} trailing'
+
+    with pytest.raises(DeviceRegistryError) as raised:
+        DeviceRegistry.from_env({"ROS_DEVICES_JSON": raw})
+
+    assert secret not in str(raised.value)
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+
+
+def test_invalid_utf8_configuration_file_does_not_retain_its_contents(tmp_path: Path) -> None:
+    secret = b"super-secret-in-invalid-utf8"
+    path = tmp_path / "invalid-utf8.json"
+    path.write_bytes(b'{"password":"' + secret + b'"}\xff')
+
+    with pytest.raises(DeviceRegistryError) as raised:
+        DeviceRegistry.from_file(path, {})
+
+    assert secret.decode() not in str(raised.value)
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
 
 
 def test_rejects_unreadable_invalid_or_empty_configuration_file(tmp_path: Path) -> None:

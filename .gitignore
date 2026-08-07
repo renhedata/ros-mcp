@@ -9,3 +9,5 @@ dist/
 build/
 *.egg-info/
 
+# Local RouterOS device configurations may contain inline credentials.
+devices.json

@@ -87,12 +87,16 @@ class DeviceRegistry:
             )
 
         config_path = Path(path)
+        read_error: DeviceRegistryError | None = None
         try:
             raw_devices = config_path.read_text(encoding="utf-8")
-        except UnicodeDecodeError as exc:
-            raise DeviceRegistryError(f"configuration file {config_path!s} must be UTF-8") from exc
-        except OSError as exc:
-            raise DeviceRegistryError(f"cannot read configuration file {config_path!s}") from exc
+        except UnicodeDecodeError:
+            read_error = DeviceRegistryError(f"configuration file {config_path!s} must be UTF-8")
+        except OSError:
+            read_error = DeviceRegistryError(f"cannot read configuration file {config_path!s}")
+
+        if read_error is not None:
+            raise read_error
 
         if not raw_devices.strip():
             raise DeviceRegistryError(f"configuration file {config_path!s} is empty")
@@ -113,6 +117,7 @@ class DeviceRegistry:
     ) -> DeviceRegistry:
         """Validate a JSON device registry and resolve its secret references."""
 
+        parse_error: DeviceRegistryError | None = None
         try:
             parsed = json.loads(
                 raw_devices,
@@ -121,8 +126,11 @@ class DeviceRegistry:
             )
         except DeviceRegistryError:
             raise
-        except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            raise DeviceRegistryError(f"{source} must contain valid JSON") from exc
+        except (json.JSONDecodeError, TypeError, ValueError):
+            parse_error = DeviceRegistryError(f"{source} must contain valid JSON")
+
+        if parse_error is not None:
+            raise parse_error
 
         if not isinstance(parsed, dict):
             raise DeviceRegistryError(f"{source} must be a JSON object")
@@ -141,11 +149,20 @@ class DeviceRegistry:
             try:
                 config = DeviceConfig.model_validate(unvalidated_config)
             except ValidationError as exc:
-                raise DeviceRegistryError(
-                    f"invalid configuration for device {device_id!r}: {exc}"
-                ) from exc
+                locations = (
+                    ", ".join(
+                        ".".join(str(part) for part in error["loc"])
+                        for error in exc.errors(include_input=False)
+                    )
+                    or "configuration"
+                )
+            else:
+                resolved[device_id] = cls._resolve_device(device_id, config, environment)
+                continue
 
-            resolved[device_id] = cls._resolve_device(device_id, config, environment)
+            raise DeviceRegistryError(
+                f"invalid configuration for device {device_id!r} at {locations}"
+            )
 
         return cls(resolved)
 
@@ -179,12 +196,16 @@ class DeviceRegistry:
 
         if isinstance(config.auth, PasswordAuthConfig):
             auth_type = AuthType.PASSWORD
-            password = cls._resolve_secret(
-                environment,
-                config.auth.password_env,
-                device_id=device_id,
-                secret_kind="password",
-            )
+            if config.auth.password is not None:
+                password = config.auth.password
+            else:
+                assert config.auth.password_env is not None
+                password = cls._resolve_secret(
+                    environment,
+                    config.auth.password_env,
+                    device_id=device_id,
+                    secret_kind="password",
+                )
         else:
             auth_type = AuthType.PRIVATE_KEY
             private_key = cls._resolve_secret(

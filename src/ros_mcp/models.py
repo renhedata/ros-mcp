@@ -54,7 +54,23 @@ class AuthType(StrEnum):
 
 class PasswordAuthConfig(StrictModel):
     type: Literal["password"]
-    password_env: EnvironmentVariableName = Field(repr=False)
+    password: SecretStr | None = Field(default=None, exclude=True, repr=False)
+    password_env: EnvironmentVariableName | None = Field(default=None, repr=False)
+
+    @field_validator("password")
+    @classmethod
+    def reject_empty_password(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and not value.get_secret_value().strip():
+            raise ValueError("password must be non-blank")
+        return value
+
+    @model_validator(mode="after")
+    def validate_password_source(self) -> Self:
+        if (self.password is None) == (self.password_env is None):
+            raise ValueError(
+                "password authentication requires exactly one of password or password_env"
+            )
+        return self
 
 
 class PrivateKeyAuthConfig(StrictModel):
@@ -101,7 +117,7 @@ class HostKeyConfig(StrictModel):
 
 
 class DeviceConfig(StrictModel):
-    """Validated, unresolved configuration from ``ROS_DEVICES_JSON``."""
+    """Validated device configuration before secret references are resolved."""
 
     display_name: NonEmptyString | None = None
     description: str | None = None
