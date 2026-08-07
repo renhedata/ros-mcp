@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -24,6 +25,12 @@ def password_device(password_env: str, **overrides: object) -> dict[str, object]
 
 def environment(devices: dict[str, object], **secrets: str) -> dict[str, str]:
     return {"ROS_DEVICES_JSON": json.dumps(devices), **secrets}
+
+
+def write_config_file(tmp_path: Path, devices: dict[str, object]) -> Path:
+    path = tmp_path / "devices.json"
+    path.write_text(json.dumps(devices), encoding="utf-8")
+    return path
 
 
 def test_loads_multiple_devices_with_independent_passwords() -> None:
@@ -53,6 +60,34 @@ def test_loads_multiple_devices_with_independent_passwords() -> None:
     assert registry.get("office").password.get_secret_value() == "office-secret"
     assert registry.get("main").display_name == "Main Router"
     assert registry.get("office").display_name == "office"
+
+
+def test_loads_devices_from_a_configuration_file(tmp_path: Path) -> None:
+    config_path = write_config_file(
+        tmp_path,
+        {
+            "main": password_device("MAIN_PASSWORD", display_name="Main Router"),
+            "office": password_device(
+                "OFFICE_PASSWORD",
+                host="198.51.100.8",
+                host_key={"fingerprint_sha256": FINGERPRINT_B},
+            ),
+        },
+    )
+
+    registry = DeviceRegistry.from_file(
+        config_path,
+        {
+            "MAIN_PASSWORD": "main-secret",
+            "OFFICE_PASSWORD": "office-secret",
+        },
+    )
+
+    assert registry.device_ids == ("main", "office")
+    assert registry.get("main").password is not None
+    assert registry.get("main").password.get_secret_value() == "main-secret"
+    assert registry.get("office").password is not None
+    assert registry.get("office").password.get_secret_value() == "office-secret"
 
 
 def test_resolves_complete_private_key_and_optional_passphrase() -> None:
@@ -172,6 +207,30 @@ def test_rejects_missing_empty_or_non_object_registry(environ: dict[str, str]) -
         DeviceRegistry.from_env(environ)
 
 
+def test_rejects_unreadable_invalid_or_empty_configuration_file(tmp_path: Path) -> None:
+    missing_path = tmp_path / "missing.json"
+    invalid_path = tmp_path / "invalid.json"
+    invalid_path.write_text("not json", encoding="utf-8")
+    empty_path = tmp_path / "empty.json"
+    empty_path.write_text("", encoding="utf-8")
+    non_utf8_path = tmp_path / "non-utf8.json"
+    non_utf8_path.write_bytes(b"\xff")
+
+    for path in (missing_path, invalid_path, empty_path, non_utf8_path):
+        with pytest.raises(DeviceRegistryError):
+            DeviceRegistry.from_file(path)
+
+
+def test_rejects_both_configuration_sources(tmp_path: Path) -> None:
+    config_path = write_config_file(tmp_path, {"main": password_device("PASS")})
+
+    with pytest.raises(DeviceRegistryError, match="ROS_DEVICES_JSON"):
+        DeviceRegistry.from_file(
+            config_path,
+            environment({"main": password_device("PASS")}, PASS="secret"),
+        )
+
+
 @pytest.mark.parametrize("secret", [None, "", "   "])
 def test_rejects_missing_or_empty_secret(secret: str | None) -> None:
     environ = environment({"main": password_device("PASS")})
@@ -182,7 +241,7 @@ def test_rejects_missing_or_empty_secret(secret: str | None) -> None:
         DeviceRegistry.from_env(environ)
 
 
-def test_rejects_duplicate_device_key_before_json_value_is_lost() -> None:
+def test_rejects_duplicate_device_key_before_json_value_is_lost(tmp_path: Path) -> None:
     raw = (
         '{"main":{"host":"192.0.2.1","username":"u",'
         '"auth":{"type":"password","password_env":"PASS"},'
@@ -194,6 +253,11 @@ def test_rejects_duplicate_device_key_before_json_value_is_lost() -> None:
 
     with pytest.raises(DeviceRegistryError, match="duplicate JSON key"):
         DeviceRegistry.from_env({"ROS_DEVICES_JSON": raw, "PASS": "secret"})
+
+    config_path = tmp_path / "duplicate-keys.json"
+    config_path.write_text(raw, encoding="utf-8")
+    with pytest.raises(DeviceRegistryError, match="duplicate JSON key"):
+        DeviceRegistry.from_file(config_path, {"PASS": "secret"})
 
 
 def test_unknown_device_has_a_specific_exception() -> None:

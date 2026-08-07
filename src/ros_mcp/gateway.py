@@ -6,6 +6,7 @@ import asyncio
 import re
 import time
 from collections.abc import Mapping
+from pathlib import Path
 
 from .device_registry import DeviceNotFoundError, DeviceRegistry
 from .models import (
@@ -118,6 +119,18 @@ def create_gateway_from_env(
 
     return Gateway(
         registry=DeviceRegistry.from_env(environ),
+        ssh=ParamikoSSHAdapter(),
+    )
+
+
+def create_gateway_from_file(
+    path: str | Path,
+    environ: Mapping[str, str] | None = None,
+) -> Gateway:
+    """Build the production Gateway from a device registry file and environment secrets."""
+
+    return Gateway(
+        registry=DeviceRegistry.from_file(path, environ),
         ssh=ParamikoSSHAdapter(),
     )
 

@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable
+import argparse
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
+from functools import partial
+from pathlib import Path
 from typing import cast
 
 from mcp.server.fastmcp import Context, FastMCP
 
-from ros_mcp.gateway import Gateway, create_gateway_from_env
+from ros_mcp.gateway import Gateway, create_gateway_from_env, create_gateway_from_file
 from ros_mcp.models import CommandResult, DeviceListResult
 
 GatewayFactory = Callable[[], Gateway]
@@ -63,6 +66,20 @@ def create_server(
     return server
 
 
-def main() -> None:
+def main(argv: Sequence[str] | None = None) -> None:
     """Run the gateway using MCP's stdio transport."""
-    create_server().run(transport="stdio")
+
+    parser = argparse.ArgumentParser(description="Run the RouterOS MCP gateway over stdio.")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        metavar="PATH",
+        help="read the device registry JSON from PATH instead of ROS_DEVICES_JSON",
+    )
+    arguments = parser.parse_args(argv)
+
+    gateway_factory: GatewayFactory = create_gateway_from_env
+    if arguments.config is not None:
+        gateway_factory = partial(create_gateway_from_file, arguments.config)
+
+    create_server(gateway_factory).run(transport="stdio")

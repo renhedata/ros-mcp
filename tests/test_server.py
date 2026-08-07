@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from mcp.shared.memory import create_connected_server_and_client_session
@@ -159,12 +160,38 @@ def test_main_runs_stdio_without_writing_to_stdout(monkeypatch: Any, capsys: Any
     transports: list[str] = []
 
     class FakeServer:
+        def __init__(self, *_: object) -> None:
+            pass
+
         def run(self, *, transport: str) -> None:
             transports.append(transport)
 
     monkeypatch.setattr(server_module, "create_server", FakeServer)
 
-    server_module.main()
+    server_module.main([])
 
     assert transports == ["stdio"]
     assert capsys.readouterr().out == ""
+
+
+def test_main_uses_a_configuration_file_when_requested(monkeypatch: Any) -> None:
+    captured_factory: object | None = None
+    transports: list[str] = []
+
+    class FakeServer:
+        def run(self, *, transport: str) -> None:
+            transports.append(transport)
+
+    def fake_create_server(factory: object) -> FakeServer:
+        nonlocal captured_factory
+        captured_factory = factory
+        return FakeServer()
+
+    monkeypatch.setattr(server_module, "create_server", fake_create_server)
+
+    server_module.main(["--config", "/config/devices.json"])
+
+    assert transports == ["stdio"]
+    assert captured_factory is not None
+    assert captured_factory.func is server_module.create_gateway_from_file
+    assert captured_factory.args == (Path("/config/devices.json"),)

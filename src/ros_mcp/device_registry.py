@@ -6,6 +6,7 @@ import json
 import os
 import re
 from collections.abc import Mapping
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
@@ -69,6 +70,49 @@ class DeviceRegistry:
         if not isinstance(raw_devices, str) or not raw_devices.strip():
             raise DeviceRegistryError(f"required environment variable {DEVICES_ENV_VAR} is empty")
 
+        return cls._from_json(raw_devices, environment, source=DEVICES_ENV_VAR)
+
+    @classmethod
+    def from_file(
+        cls,
+        path: str | Path,
+        environ: Mapping[str, str] | None = None,
+    ) -> DeviceRegistry:
+        """Load a device registry file and resolve its secret references from the environment."""
+
+        environment = dict(os.environ if environ is None else environ)
+        if DEVICES_ENV_VAR in environment:
+            raise DeviceRegistryError(
+                f"configuration file cannot be used when {DEVICES_ENV_VAR} is also set"
+            )
+
+        config_path = Path(path)
+        try:
+            raw_devices = config_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise DeviceRegistryError(f"configuration file {config_path!s} must be UTF-8") from exc
+        except OSError as exc:
+            raise DeviceRegistryError(f"cannot read configuration file {config_path!s}") from exc
+
+        if not raw_devices.strip():
+            raise DeviceRegistryError(f"configuration file {config_path!s} is empty")
+
+        return cls._from_json(
+            raw_devices,
+            environment,
+            source=f"configuration file {config_path!s}",
+        )
+
+    @classmethod
+    def _from_json(
+        cls,
+        raw_devices: str,
+        environment: Mapping[str, str],
+        *,
+        source: str,
+    ) -> DeviceRegistry:
+        """Validate a JSON device registry and resolve its secret references."""
+
         try:
             parsed = json.loads(
                 raw_devices,
@@ -78,10 +122,10 @@ class DeviceRegistry:
         except DeviceRegistryError:
             raise
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            raise DeviceRegistryError(f"{DEVICES_ENV_VAR} must contain valid JSON") from exc
+            raise DeviceRegistryError(f"{source} must contain valid JSON") from exc
 
         if not isinstance(parsed, dict):
-            raise DeviceRegistryError(f"{DEVICES_ENV_VAR} must be a JSON object")
+            raise DeviceRegistryError(f"{source} must be a JSON object")
         if not parsed:
             raise DeviceRegistryError("at least one device is required")
 

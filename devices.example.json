@@ -1,0 +1,37 @@
+{
+  "main": {
+    "display_name": "Main Router",
+    "description": "Internet edge",
+    "host": "192.168.88.1",
+    "port": 22,
+    "username": "ai-mgmt",
+    "enabled": true,
+    "tags": ["production", "edge"],
+    "connect_timeout_seconds": 15,
+    "command_timeout_seconds": 25,
+    "keepalive_seconds": 30,
+    "idle_ttl_seconds": 300,
+    "output_limit_bytes": 1048576,
+    "auth": {
+      "type": "password",
+      "password_env": "ROS_MAIN_PASSWORD"
+    },
+    "host_key": {
+      "fingerprint_sha256": "SHA256:REPLACE_WITH_43_BASE64_CHARACTERS"
+    }
+  },
+  "office": {
+    "display_name": "Office Router",
+    "host": "10.0.0.1",
+    "port": 22,
+    "username": "ai-mgmt",
+    "auth": {
+      "type": "private_key",
+      "private_key_env": "ROS_OFFICE_PRIVATE_KEY",
+      "passphrase_env": "ROS_OFFICE_KEY_PASSPHRASE"
+    },
+    "host_key": {
+      "fingerprint_sha256": "SHA256:REPLACE_WITH_43_BASE64_CHARACTERS"
+    }
+  }
+}
