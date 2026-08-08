@@ -140,6 +140,20 @@ uv run ros-mcp --config /absolute/path/to/devices.json
 The process speaks MCP over stdio. Application code does not write ordinary
 messages to stdout because stdout belongs to the protocol.
 
+## Run with uvx
+
+Use `uvx` to run a released version without cloning this repository. Pin the
+Git tag (or a full commit SHA) so deployments do not move with a branch:
+
+```bash
+uvx --from 'git+https://github.com/asharca/ros-mcp.git@v0.1.0' \
+  ros-mcp --config /absolute/path/to/devices.json
+```
+
+The final `ros-mcp` selects this project's console command. This requires `uv`
+and Git. Do not use `uvx ros-mcp`: that PyPI name belongs to a different
+project. This repository is installed from its Git source instead.
+
 ## Docker
 
 Published images are available from GHCR:
@@ -195,9 +209,30 @@ Docker's `-e` option.
 ## Deploy as an MCP server
 
 ROS-MCP uses the stdio transport. Configure your MCP client to start one process
-per server instance and keep its stdin and stdout connected to the client. Client
-configuration formats differ, but clients that use an `mcpServers` object can
-use the following Docker command shape for a secret-mounted configuration file.
+per server instance and keep its stdin and stdout connected to the client.
+Client configuration formats differ; clients that use an `mcpServers` object can
+use either of the following shapes.
+
+### uvx
+
+```json
+{
+  "mcpServers": {
+    "ros-mcp": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/asharca/ros-mcp.git@v0.1.0",
+        "ros-mcp",
+        "--config",
+        "/absolute/path/to/devices.json"
+      ]
+    }
+  }
+}
+```
+
+### Docker
 
 ```json
 {
